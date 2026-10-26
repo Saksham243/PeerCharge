@@ -6,6 +6,8 @@ const {
   startCharging,
   stopBooking,
   cancelBooking,
+  startSelfSession,
+  getMyOwnUsage,
   getTravelerBookings,
   getHostBookings,
   getActiveBooking,
@@ -27,6 +29,10 @@ router.post('/start-charging', protect, startCharging);
 
 // Step 4: Stop Billing
 router.post('/stop', protect, stopBooking);
+
+// FEATURE 1: Owner Self Session
+router.post('/self/start', protect, startSelfSession);
+router.get('/my-own-usage', protect, getMyOwnUsage);
 
 // Query Endpoints
 router.get('/my-traveler-bookings', protect, getTravelerBookings);

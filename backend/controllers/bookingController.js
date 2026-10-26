@@ -4,23 +4,43 @@ const Station = require('../models/Station');
 const User = require('../models/User');
 
 // =============================================================================
-// STEP 1: PARALLEL REQUESTS
+// STEP 1: PARALLEL REQUESTS (UPFRONT PAYMENT ESTIMATION)
 // Traveler can request multiple stations simultaneously.
+// Takes { stationId, durationMinutes }. durationMinutes in [30, 60, 90, 120].
 // Booking: Requested, Station status remains Available.
+// Soft check: availableBalance >= estimatedCost. (Funds NOT locked yet).
 // =============================================================================
 exports.requestBooking = async (req, res) => {
   try {
-    const { stationId } = req.body;
+    const { stationId, durationMinutes } = req.body;
 
-    // Check if traveler already has an ongoing Active session
+    const validDurations = [30, 60, 90, 120];
+    const duration = Number(durationMinutes);
+    if (!validDurations.includes(duration)) {
+      return res.status(400).json({ message: 'durationMinutes must be one of 30, 60, 90, 120' });
+    }
+
+    // Check if traveler already has an ongoing Active public session
     const activeSession = await Booking.findOne({
       traveler: req.user._id,
-      status: 'Active'
+      status: 'Active',
+      type: 'Public'
     });
     if (activeSession) {
       return res.status(400).json({
         message: 'You already have an active charging session in progress'
       });
+    }
+
+    // Station must be Available to receive requests
+    const station = await Station.findOne({ _id: stationId, status: 'Available' });
+    if (!station) {
+      return res.status(400).json({ message: 'Station is currently not available for booking' });
+    }
+
+    // FEATURE 1: Caller cannot request their own station
+    if (station.host.toString() === req.user._id.toString()) {
+      return res.status(400).json({ message: 'You cannot request your own charging station' });
     }
 
     // Check if traveler already requested this exact station
@@ -35,18 +55,25 @@ exports.requestBooking = async (req, res) => {
       });
     }
 
-    // Station must be Available to receive requests
-    const station = await Station.findOne({ _id: stationId, status: 'Available' });
-    if (!station) {
-      return res.status(400).json({ message: 'Station is currently not available for booking' });
+    // FEATURE 2: Calculate estimated cost & soft check traveler available balance
+    const estimatedCost = Math.max(10, Math.round((duration * (station.pricePerHour / 60)) * 100) / 100);
+    const travelerUser = await User.findById(req.user._id);
+    const availableBalance = (travelerUser.walletBalance || 0) - (travelerUser.heldBalance || 0);
+
+    if (availableBalance < estimatedCost) {
+      return res.status(400).json({ message: 'Insufficient balance' });
     }
 
-    // Create booking in Requested state. Station remains Available.
+    // Create booking in Requested state. Funds are NOT locked at this step. Station remains Available.
     const booking = await Booking.create({
       station: stationId,
       traveler: req.user._id,
       host: station.host,
-      status: 'Requested'
+      type: 'Public',
+      status: 'Requested',
+      durationMinutes: duration,
+      estimatedCost: estimatedCost,
+      heldAmount: 0
     });
 
     const populated = await Booking.findById(booking._id)
@@ -60,8 +87,9 @@ exports.requestBooking = async (req, res) => {
 };
 
 // =============================================================================
-// STEP 2: HOST ACCEPTS
-// Host clicks "Accept". Update Booking to Accepted and Station to Reserved.
+// STEP 2: HOST ACCEPTS (PLACE HOLD & RESERVE STATION)
+// Places hold on traveler's walletBalance via atomic User.findOneAndUpdate.
+// If successful, reserves the station. If station reserve fails, reverts hold.
 // =============================================================================
 exports.acceptBooking = async (req, res) => {
   try {
@@ -77,19 +105,45 @@ exports.acceptBooking = async (req, res) => {
       return res.status(404).json({ message: 'Requested booking not found or already processed' });
     }
 
-    // Check if the host's station is still Available
-    const station = await Station.findOne({ _id: booking.station, status: 'Available' });
+    // 1. Place the hold atomically on traveler's wallet
+    const travelerUser = await User.findOneAndUpdate(
+      {
+        _id: booking.traveler,
+        $expr: {
+          $gte: [
+            { $subtract: ['$walletBalance', '$heldBalance'] },
+            booking.estimatedCost
+          ]
+        }
+      },
+      { $inc: { heldBalance: booking.estimatedCost } },
+      { new: true }
+    );
+
+    if (!travelerUser) {
+      return res.status(400).json({ message: 'Traveler no longer has enough balance' });
+    }
+
+    // 2. Reserve the station
+    const station = await Station.findOneAndUpdate(
+      { _id: booking.station, status: 'Available' },
+      { status: 'Reserved' },
+      { new: true }
+    );
+
     if (!station) {
+      // Undo hold if station is no longer Available
+      await User.findByIdAndUpdate(booking.traveler, {
+        $inc: { heldBalance: -booking.estimatedCost }
+      });
       return res.status(400).json({
         message: 'Your station is already reserved or occupied by another booking'
       });
     }
 
-    // Update Station to Reserved & Booking to Accepted
-    station.status = 'Reserved';
-    await station.save();
-
+    // 3. Mark booking as Accepted and record heldAmount
     booking.status = 'Accepted';
+    booking.heldAmount = booking.estimatedCost;
     await booking.save();
 
     const populated = await Booking.findById(booking._id)
@@ -102,7 +156,9 @@ exports.acceptBooking = async (req, res) => {
   }
 };
 
-// Host declines/rejects a booking request
+// =============================================================================
+// HOST DECLINES (RELEASES HOLD IF ACCEPTED)
+// =============================================================================
 exports.declineBooking = async (req, res) => {
   try {
     const { bookingId } = req.body;
@@ -117,13 +173,21 @@ exports.declineBooking = async (req, res) => {
       return res.status(404).json({ message: 'Booking request not found' });
     }
 
-    const previousStatus = booking.status;
+    const wasAccepted = booking.status === 'Accepted';
+    const heldToRelease = booking.heldAmount || 0;
+
     booking.status = 'Canceled';
     booking.endTime = new Date();
+    booking.heldAmount = 0;
     await booking.save();
 
-    // If it was Accepted, revert station back to Available
-    if (previousStatus === 'Accepted') {
+    // If it was Accepted, release hold and revert station to Available
+    if (wasAccepted) {
+      if (heldToRelease > 0) {
+        await User.findByIdAndUpdate(booking.traveler, {
+          $inc: { heldBalance: -heldToRelease }
+        });
+      }
       await Station.findByIdAndUpdate(booking.station, { status: 'Available' });
     }
 
@@ -135,13 +199,12 @@ exports.declineBooking = async (req, res) => {
 
 // =============================================================================
 // STEP 3: START BILLING (TRAVELER ARRIVES) - MONGODB TRANSACTION
-// Host clicks "Start Charging" once traveler arrives and connects.
-// Transaction:
-//   1. Update this Booking to Active and set startTime to Date.now()
-//   2. Update this Station to Occupied
-//   3. Query all other open Bookings (Requested or Accepted) for this traveler
-//   4. Update those other Bookings to Canceled
-//   5. Revert the Stations tied to those canceled bookings back to Available
+// Host clicks "Start Charging".
+// 1. Update this Booking to Active, startTime = now
+// 2. Update this Station to Occupied
+// 3. Query all other open Bookings (Requested/Accepted) for this traveler
+// 4. Update those other Bookings to Canceled
+// 5. Release holds on the Accepted other bookings & revert their stations to Available
 // =============================================================================
 exports.startCharging = async (req, res) => {
   try {
@@ -171,7 +234,7 @@ exports.startCharging = async (req, res) => {
         // 2. Update this Station to Occupied
         await Station.findByIdAndUpdate(booking.station, { status: 'Occupied' }, { session });
 
-        // 3. Query all other open Bookings (Requested or Accepted) for this specific travelerId
+        // 3. Query all other open Bookings (Requested or Accepted) for this traveler
         const otherBookings = await Booking.find({
           _id: { $ne: booking._id },
           traveler: booking.traveler,
@@ -179,31 +242,35 @@ exports.startCharging = async (req, res) => {
         }).session(session);
 
         if (otherBookings.length > 0) {
-          const otherBookingIds = otherBookings.map(b => b._id);
+          for (const other of otherBookings) {
+            // Release hold and revert station if it was Accepted
+            if (other.status === 'Accepted') {
+              if (other.heldAmount > 0) {
+                await User.findByIdAndUpdate(
+                  other.traveler,
+                  { $inc: { heldBalance: -other.heldAmount } },
+                  { session }
+                );
+              }
+              await Station.findByIdAndUpdate(
+                other.station,
+                { status: 'Available' },
+                { session }
+              );
+            }
+          }
 
-          // 4. Update those other Bookings to Canceled
+          // Mark other bookings as Canceled
+          const otherBookingIds = otherBookings.map(b => b._id);
           await Booking.updateMany(
             { _id: { $in: otherBookingIds } },
-            { status: 'Canceled' },
+            { status: 'Canceled', heldAmount: 0 },
             { session }
           );
-
-          // 5. Revert Stations tied to those canceled bookings (that were Reserved) back to Available
-          const stationsToRevert = otherBookings
-            .filter(b => b.status === 'Accepted')
-            .map(b => b.station);
-
-          if (stationsToRevert.length > 0) {
-            await Station.updateMany(
-              { _id: { $in: stationsToRevert } },
-              { status: 'Available' },
-              { session }
-            );
-          }
         }
       });
     } catch (txError) {
-      // Fallback for standalone MongoDB instances without replica sets
+      // Standalone MongoDB fallback
       if (txError.message && (txError.message.includes('replica set') || txError.message.includes('Transaction numbers'))) {
         booking.status = 'Active';
         booking.startTime = new Date();
@@ -218,22 +285,20 @@ exports.startCharging = async (req, res) => {
         });
 
         if (otherBookings.length > 0) {
+          for (const other of otherBookings) {
+            if (other.status === 'Accepted') {
+              if (other.heldAmount > 0) {
+                await User.findByIdAndUpdate(other.traveler, { $inc: { heldBalance: -other.heldAmount } });
+              }
+              await Station.findByIdAndUpdate(other.station, { status: 'Available' });
+            }
+          }
+
           const otherBookingIds = otherBookings.map(b => b._id);
           await Booking.updateMany(
             { _id: { $in: otherBookingIds } },
-            { status: 'Canceled' }
+            { status: 'Canceled', heldAmount: 0 }
           );
-
-          const stationsToRevert = otherBookings
-            .filter(b => b.status === 'Accepted')
-            .map(b => b.station);
-
-          if (stationsToRevert.length > 0) {
-            await Station.updateMany(
-              { _id: { $in: stationsToRevert } },
-              { status: 'Available' }
-            );
-          }
         }
       } else {
         throw txError;
@@ -253,19 +318,54 @@ exports.startCharging = async (req, res) => {
 };
 
 // =============================================================================
-// STEP 4: STOP BILLING
-// Host or Traveler clicks "Stop".
-// Deduct funds, set Booking to Completed, and Station to Available.
+// STEP 4: STOP BILLING (ATOMIC CLAIM, SETTLE HOLD & WALLET)
+// Handles both Self sessions and Public sessions.
+// For Public:
+// - Claims booking atomically via Booking.findOneAndUpdate
+// - Charges min(actualCost, walletBalance)
+// - Releases full hold (heldBalance -= heldAmount)
+// - Credits host with charged amount
+// - Sets Station to Available
 // =============================================================================
 exports.stopBooking = async (req, res) => {
   try {
     const { bookingId } = req.body;
 
-    const booking = await Booking.findOne({
-      _id: bookingId,
-      status: 'Active',
-      $or: [{ traveler: req.user._id }, { host: req.user._id }]
-    }).populate('station');
+    // 1. Check if this is an active Self session first
+    const selfBooking = await Booking.findOneAndUpdate(
+      {
+        _id: bookingId,
+        status: 'Active',
+        type: 'Self',
+        host: req.user._id
+      },
+      { status: 'Completed', endTime: new Date(), totalCost: 0 },
+      { new: true }
+    ).populate('station');
+
+    if (selfBooking) {
+      // Revert station to Available, no wallet movements
+      await Station.findByIdAndUpdate(selfBooking.station._id, { status: 'Available' });
+      const durationMinutes = Math.max(1, Math.ceil((new Date(selfBooking.endTime) - new Date(selfBooking.startTime)) / 60000));
+      return res.json({
+        message: 'Self charging session completed',
+        booking: selfBooking,
+        durationMinutes,
+        totalCost: 0
+      });
+    }
+
+    // 2. Claim Public booking atomically to prevent double-stop
+    const booking = await Booking.findOneAndUpdate(
+      {
+        _id: bookingId,
+        status: 'Active',
+        type: 'Public',
+        $or: [{ traveler: req.user._id }, { host: req.user._id }]
+      },
+      { status: 'Completed' },
+      { new: false } // Need existing heldAmount and details before completion
+    ).populate('station');
 
     if (!booking) {
       return res.status(404).json({ message: 'Active booking not found or already completed' });
@@ -273,30 +373,133 @@ exports.stopBooking = async (req, res) => {
 
     const endTime = new Date();
     const startTime = booking.startTime || booking.createdAt || new Date();
-    const minutes = Math.max(1, Math.ceil((endTime - new Date(startTime)) / 60000));
+    const actualMinutes = Math.max(1, Math.ceil((endTime - new Date(startTime)) / 60000));
     const rate = booking.station?.pricePerHour || 120;
-    const cost = Math.max(10, Math.round((minutes * (rate / 60)) * 100) / 100);
+    const actualCost = Math.max(10, Math.round((actualMinutes * (rate / 60)) * 100) / 100);
 
-    // Deduct from traveler and credit to host
-    await User.findByIdAndUpdate(booking.traveler, { $inc: { walletBalance: -cost } });
-    await User.findByIdAndUpdate(booking.host, { $inc: { walletBalance: cost } });
+    // Charge min(actualCost, walletBalance) so wallet never goes negative
+    const traveler = await User.findById(booking.traveler);
+    const chargedAmount = Math.max(0, Math.min(actualCost, traveler ? traveler.walletBalance : actualCost));
+    const heldAmount = booking.heldAmount || 0;
+    const refundedAmount = Math.max(0, Math.round((heldAmount - chargedAmount) * 100) / 100);
+
+    // Deduct chargedAmount and release full heldAmount from traveler
+    await User.findByIdAndUpdate(booking.traveler, {
+      $inc: {
+        walletBalance: -chargedAmount,
+        heldBalance: -heldAmount
+      }
+    });
+
+    // Credit host with amount actually charged
+    await User.findByIdAndUpdate(booking.host, {
+      $inc: { walletBalance: chargedAmount }
+    });
 
     // Revert station back to Available
     await Station.findByIdAndUpdate(booking.station._id, { status: 'Available' });
 
+    // Save final details on booking
     booking.endTime = endTime;
-    booking.totalCost = cost;
+    booking.totalCost = chargedAmount;
+    booking.heldAmount = 0;
     booking.status = 'Completed';
     await booking.save();
 
     const updatedTraveler = await User.findById(booking.traveler).select('-password');
+    const availableBalance = (updatedTraveler.walletBalance || 0) - (updatedTraveler.heldBalance || 0);
 
     res.json({
       message: 'Charging session completed',
       booking,
-      durationMinutes: minutes,
-      totalCost: cost,
-      walletBalance: updatedTraveler ? updatedTraveler.walletBalance : undefined
+      totalCost: chargedAmount,
+      refundedAmount,
+      durationMinutes: actualMinutes,
+      walletBalance: updatedTraveler.walletBalance,
+      availableBalance
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// =============================================================================
+// FEATURE 1: OWNER SELF SESSION (START)
+// Owner occupies their own charger without money movement.
+// =============================================================================
+exports.startSelfSession = async (req, res) => {
+  try {
+    const stationDoc = await Station.findOne({ host: req.user._id });
+    if (!stationDoc) {
+      return res.status(400).json({ message: 'You do not own a charging station' });
+    }
+
+    // Try to atomically set Available station to Occupied
+    const station = await Station.findOneAndUpdate(
+      { _id: stationDoc._id, host: req.user._id, status: 'Available' },
+      { status: 'Occupied' },
+      { new: true }
+    );
+
+    if (!station) {
+      if (stationDoc.status === 'Reserved') {
+        return res.status(400).json({
+          message: 'Station is reserved. Please decline the accepted booking before starting a self session.'
+        });
+      }
+      if (stationDoc.status === 'Occupied') {
+        return res.status(400).json({
+          message: 'Station is currently occupied by an active charging session.'
+        });
+      }
+      return res.status(400).json({ message: 'Station is not available' });
+    }
+
+    const booking = await Booking.create({
+      station: station._id,
+      type: 'Self',
+      traveler: req.user._id,
+      host: req.user._id,
+      status: 'Active',
+      startTime: new Date(),
+      totalCost: 0
+    });
+
+    const populated = await Booking.findById(booking._id).populate('station');
+    res.status(201).json(populated);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// FEATURE 1: Host own usage statistics
+exports.getMyOwnUsage = async (req, res) => {
+  try {
+    const selfBookings = await Booking.find({
+      host: req.user._id,
+      type: 'Self',
+      status: 'Completed'
+    }).sort({ endTime: -1 });
+
+    const usage = selfBookings.map(b => {
+      const start = new Date(b.startTime || b.createdAt);
+      const end = b.endTime ? new Date(b.endTime) : new Date();
+      const durationMinutes = Math.max(1, Math.round((end - start) / 60000));
+      return {
+        _id: b._id,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        durationMinutes,
+        createdAt: b.createdAt
+      };
+    });
+
+    const totalOwnMinutes = usage.reduce((sum, item) => sum + item.durationMinutes, 0);
+
+    res.json({
+      totalOwnMinutes,
+      sessionsCount: usage.length,
+      usage
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -307,11 +510,12 @@ exports.stopBooking = async (req, res) => {
 // HELPER QUERY ENDPOINTS
 // =============================================================================
 
-// Traveler fetches all their open bookings (Requested, Accepted, Active)
+// Traveler fetches their open Public bookings (ignore Self)
 exports.getTravelerBookings = async (req, res) => {
   try {
     const bookings = await Booking.find({
       traveler: req.user._id,
+      type: 'Public',
       status: { $in: ['Requested', 'Accepted', 'Active'] }
     })
       .populate('station')
@@ -324,7 +528,7 @@ exports.getTravelerBookings = async (req, res) => {
   }
 };
 
-// Host fetches their active queue (Requested, Accepted, Active)
+// Host fetches active queue (Requested, Accepted, and Active - includes Self)
 exports.getHostBookings = async (req, res) => {
   try {
     const bookings = await Booking.find({
@@ -341,7 +545,7 @@ exports.getHostBookings = async (req, res) => {
   }
 };
 
-// Traveler cancels one of their pending/accepted requests
+// Traveler cancels their request (releases hold if Accepted)
 exports.cancelBooking = async (req, res) => {
   try {
     const { bookingId } = req.body;
@@ -357,12 +561,20 @@ exports.cancelBooking = async (req, res) => {
     }
 
     const wasAccepted = booking.status === 'Accepted';
+    const heldToRelease = booking.heldAmount || 0;
+
     booking.status = 'Canceled';
     booking.endTime = new Date();
+    booking.heldAmount = 0;
     await booking.save();
 
-    // If it was Accepted, revert Station to Available
+    // If it was Accepted, release hold and revert Station to Available
     if (wasAccepted) {
+      if (heldToRelease > 0) {
+        await User.findByIdAndUpdate(booking.traveler, {
+          $inc: { heldBalance: -heldToRelease }
+        });
+      }
       await Station.findByIdAndUpdate(booking.station, { status: 'Available' });
     }
 
@@ -372,11 +584,12 @@ exports.cancelBooking = async (req, res) => {
   }
 };
 
-// Backward-compatible getActiveBooking
+// Backward-compatible getActiveBooking (ignores Self sessions)
 exports.getActiveBooking = async (req, res) => {
   try {
     const active = await Booking.findOne({
       traveler: req.user._id,
+      type: 'Public',
       status: { $in: ['Requested', 'Accepted', 'Active'] }
     })
       .populate('station')
@@ -388,10 +601,14 @@ exports.getActiveBooking = async (req, res) => {
   }
 };
 
-// Host lifetime completed history
+// Host lifetime completed history (strictly Public sessions only, excludes Self)
 exports.getHostHistory = async (req, res) => {
   try {
-    const bookings = await Booking.find({ host: req.user._id, status: 'Completed' })
+    const bookings = await Booking.find({
+      host: req.user._id,
+      status: 'Completed',
+      type: 'Public'
+    })
       .populate('traveler', 'name email')
       .populate('station', 'name pricePerHour address')
       .sort({ endTime: -1 });

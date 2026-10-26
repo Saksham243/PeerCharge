@@ -6,10 +6,13 @@ exports.createStation = async (req, res) => {
 
     let station = await Station.findOne({ host: req.user._id });
     if (station) {
+      if (station.status === 'Reserved' || station.status === 'Occupied') {
+        return res.status(400).json({ message: 'Finish or release the current booking before editing' });
+      }
       station.name = name || station.name;
       station.pricePerHour = Number(pricePerHour) || station.pricePerHour;
       station.address = address || station.address;
-      station.status = 'Available';
+      // Do NOT reset status to Available
       await station.save();
       return res.json(station);
     }
@@ -38,7 +41,11 @@ exports.getMyStation = async (req, res) => {
 
 exports.getNearbyStations = async (req, res) => {
   try {
-    const stations = await Station.find({ status: 'Available' }).populate('host', 'name email');
+    const filter = { status: 'Available' };
+    if (req.user && req.user._id) {
+      filter.host = { $ne: req.user._id };
+    }
+    const stations = await Station.find(filter).populate('host', 'name email');
     res.json(stations);
   } catch (error) {
     res.status(500).json({ message: error.message });

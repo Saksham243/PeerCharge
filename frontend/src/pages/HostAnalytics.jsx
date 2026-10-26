@@ -21,6 +21,8 @@ export default function HostAnalytics({ user, setUser }) {
   const [station, setStation] = useState(null);
   const [hostQueue, setHostQueue] = useState([]);
   const [history, setHistory] = useState([]);
+  const [ownUsage, setOwnUsage] = useState({ totalOwnMinutes: 0, sessions: [] });
+  const [selfElapsedSeconds, setSelfElapsedSeconds] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -35,6 +37,8 @@ export default function HostAnalytics({ user, setUser }) {
 
   const authHeader = { headers: { Authorization: `Bearer ${user.token}` } };
 
+  const activeSelfSession = hostQueue.find((b) => b.type === 'Self' && b.status === 'Active');
+
   useEffect(() => {
     fetchHostData();
     // Live polling for incoming booking requests and active sessions every 3 seconds
@@ -43,6 +47,24 @@ export default function HostAnalytics({ user, setUser }) {
     }, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  // Timer for active self session
+  useEffect(() => {
+    let timer = null;
+    if (activeSelfSession && activeSelfSession.startTime) {
+      const startMs = new Date(activeSelfSession.startTime).getTime();
+      const tick = () => {
+        setSelfElapsedSeconds(Math.max(0, Math.floor((Date.now() - startMs) / 1000)));
+      };
+      tick();
+      timer = setInterval(tick, 1000);
+    } else {
+      setSelfElapsedSeconds(0);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [activeSelfSession?.startTime, activeSelfSession?._id]);
 
   const fetchHostData = async () => {
     setLoading(true);
@@ -60,10 +82,19 @@ export default function HostAnalytics({ user, setUser }) {
       const historyData = Array.isArray(historyRes.data) ? historyRes.data : (historyRes.data.history || []);
       setHistory(historyData);
 
-      // 4. Sync user wallet
+      // 4. Fetch own usage history
+      const ownUsageRes = await axios.get('http://localhost:5000/api/bookings/my-own-usage', authHeader);
+      setOwnUsage(ownUsageRes.data || { totalOwnMinutes: 0, sessions: [] });
+
+      // 5. Sync user balances
       const meRes = await axios.get('http://localhost:5000/api/auth/me', authHeader);
-      if (meRes.data) {
-        const updated = { ...user, walletBalance: meRes.data.walletBalance };
+      if (meRes.data && setUser) {
+        const updated = {
+          ...user,
+          walletBalance: meRes.data.walletBalance,
+          heldBalance: meRes.data.heldBalance,
+          availableBalance: meRes.data.availableBalance,
+        };
         localStorage.setItem('user', JSON.stringify(updated));
         setUser(updated);
       }
@@ -76,12 +107,33 @@ export default function HostAnalytics({ user, setUser }) {
 
   const fetchQueueSilently = async () => {
     try {
-      const queueRes = await axios.get('http://localhost:5000/api/bookings/host-dashboard-bookings', authHeader);
+      const [queueRes, stationRes, ownRes] = await Promise.all([
+        axios.get('http://localhost:5000/api/bookings/host-dashboard-bookings', authHeader),
+        axios.get('http://localhost:5000/api/stations/mine', authHeader),
+        axios.get('http://localhost:5000/api/bookings/my-own-usage', authHeader),
+      ]);
       setHostQueue(queueRes.data || []);
-      const stationRes = await axios.get('http://localhost:5000/api/stations/mine', authHeader);
       setStation(stationRes.data);
+      setOwnUsage(ownRes.data || { totalOwnMinutes: 0, sessions: [] });
     } catch (err) {
       // silent background poll
+    }
+  };
+
+  // Owner starts self session
+  const handleStartSelfSession = async () => {
+    setActionInProgressId('self-start');
+    try {
+      await axios.post(
+        'http://localhost:5000/api/bookings/self/start',
+        {},
+        authHeader
+      );
+      fetchHostData();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to start self charging session');
+    } finally {
+      setActionInProgressId(null);
     }
   };
 
@@ -138,6 +190,7 @@ export default function HostAnalytics({ user, setUser }) {
 
   // STEP 4: Stop Charging
   const handleStopCharging = async (bookingId) => {
+    const isSelf = activeSelfSession && activeSelfSession._id === bookingId;
     setActionInProgressId(bookingId);
     try {
       const res = await axios.post(
@@ -145,13 +198,25 @@ export default function HostAnalytics({ user, setUser }) {
         { bookingId },
         authHeader
       );
-      alert(`Charging completed! Earned ₹${res.data.totalCost || 0} for ${res.data.durationMinutes || 1} min(s).`);
+      if (isSelf) {
+        alert(`Own charging session completed! Total duration: ${res.data.durationMinutes || 1} min(s).`);
+      } else {
+        alert(`Charging completed! Earned ₹${res.data.totalCost || 0} for ${res.data.durationMinutes || 1} min(s).`);
+      }
       fetchHostData();
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to stop charging');
     } finally {
       setActionInProgressId(null);
     }
+  };
+
+  // Format seconds to HH:MM:SS
+  const formatTime = (totalSec) => {
+    const hrs = Math.floor(totalSec / 3600);
+    const mins = Math.floor((totalSec % 3600) / 60);
+    const secs = totalSec % 60;
+    return `${hrs > 0 ? `${hrs.toString().padStart(2, '0')}:` : ''}${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   const handleCreateStation = async (e) => {
@@ -257,38 +322,92 @@ export default function HostAnalytics({ user, setUser }) {
               </p>
             </div>
 
-            {/* Automated Station Status Display (Strictly no manual toggle button per Requirement 1) */}
-            <div className="flex items-center gap-2.5 bg-white px-4 py-2.5 rounded-2xl border border-slate-200/80 shadow-xs">
-              <span className={`w-3 h-3 rounded-full ${
-                station.status === 'Available'
-                  ? 'bg-emerald-500 animate-pulse'
-                  : station.status === 'Reserved'
-                  ? 'bg-indigo-600 animate-ping'
-                  : 'bg-rose-500'
-              }`} />
-              <div>
-                <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Automated Status</p>
-                <p className="text-xs font-extrabold text-slate-900 uppercase tracking-tight">
-                  {station.status === 'Available' && 'Available (Ready for Requests)'}
-                  {station.status === 'Reserved' && 'Reserved (Traveler En Route)'}
-                  {station.status === 'Occupied' && 'Occupied (Charging in Progress)'}
-                </p>
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* Start My Own Session Button */}
+              {station.status === 'Available' && !activeSelfSession && !hostQueue.some((b) => b.status === 'Accepted' || b.status === 'Active') && (
+                <button
+                  onClick={handleStartSelfSession}
+                  disabled={actionInProgressId === 'self-start'}
+                  className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold px-4 py-2.5 rounded-2xl text-xs shadow-md shadow-emerald-600/20 flex items-center gap-2 transition disabled:opacity-50"
+                >
+                  <Zap className="w-4 h-4 fill-current" />
+                  <span>{actionInProgressId === 'self-start' ? 'Starting...' : 'Start my own session'}</span>
+                </button>
+              )}
+
+              {/* Automated Station Status Display */}
+              <div className="flex items-center gap-2.5 bg-white px-4 py-2.5 rounded-2xl border border-slate-200/80 shadow-xs">
+                <span className={`w-3 h-3 rounded-full ${
+                  station.status === 'Available'
+                    ? 'bg-emerald-500 animate-pulse'
+                    : station.status === 'Reserved'
+                    ? 'bg-indigo-600 animate-ping'
+                    : 'bg-rose-500'
+                }`} />
+                <div>
+                  <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Automated Status</p>
+                  <p className="text-xs font-extrabold text-slate-900 uppercase tracking-tight">
+                    {station.status === 'Available' && 'Available (Ready for Requests)'}
+                    {station.status === 'Reserved' && 'Reserved (Traveler En Route)'}
+                    {station.status === 'Occupied' && 'Occupied (Charging in Progress)'}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
+
+          {/* Dedicated Own Charging In Progress Card (Strictly No Earnings Wording) */}
+          {activeSelfSession && (
+            <div className="bg-gradient-to-r from-slate-900 via-teal-950 to-slate-900 text-white rounded-3xl p-6 sm:p-7 shadow-xl border border-teal-500/40 flex flex-col sm:flex-row items-center justify-between gap-5 animate-fade-in">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-2xl bg-teal-500/20 text-teal-300 flex items-center justify-center shrink-0 border border-teal-400/30">
+                  <Zap className="w-6 h-6 fill-current animate-pulse text-teal-400" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-teal-400/20 text-teal-300 border border-teal-400/30">
+                      Owner Self Session
+                    </span>
+                  </div>
+                  <h3 className="text-xl font-extrabold text-white mt-1">Own charging in progress</h3>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Your personal vehicle is charging. Station is marked Occupied. No fees or wallet deductions apply.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-end">
+                <div className="bg-black/40 px-4 py-2 rounded-2xl border border-white/10 text-right">
+                  <p className="text-[10px] uppercase font-semibold text-teal-300 tracking-wider">Elapsed Time</p>
+                  <p className="font-mono text-base sm:text-lg font-extrabold text-white">
+                    {formatTime(selfElapsedSeconds)}
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => handleStopCharging(activeSelfSession._id)}
+                  disabled={actionInProgressId === activeSelfSession._id}
+                  className="bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold px-6 py-2.5 rounded-xl text-xs sm:text-sm shadow-lg shadow-rose-950/40 flex items-center gap-2 transition disabled:opacity-50 shrink-0"
+                >
+                  <Zap className="w-4 h-4 fill-current" />
+                  <span>{actionInProgressId === activeSelfSession._id ? 'Stopping...' : 'Stop Charging'}</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* =========================================================================
               ACTIVE & INCOMING BOOKINGS QUEUE
               Handles:
               - Requested: [Accept] [Decline]
-              - Accepted: [Start Charging (User Connected)]
-              - Active: [Stop & Pay]
+              - Accepted: [Start Charging (User Connected)] [Decline]
+              - Active: [Stop & Settle Session]
               ========================================================================= */}
           <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-6 sm:p-8 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
-                  hostQueue.length > 0 ? 'bg-indigo-100 text-indigo-700 animate-bounce' : 'bg-slate-100 text-slate-500'
+                  hostQueue.filter((b) => b.type !== 'Self').length > 0 ? 'bg-indigo-100 text-indigo-700 animate-bounce' : 'bg-slate-100 text-slate-500'
                 }`}>
                   <Hourglass className="w-4 h-4" />
                 </div>
@@ -303,23 +422,25 @@ export default function HostAnalytics({ user, setUser }) {
               </div>
 
               <span className={`text-xs font-bold px-3 py-1 rounded-full ${
-                hostQueue.length > 0
+                hostQueue.filter((b) => b.type !== 'Self').length > 0
                   ? 'bg-indigo-600 text-white shadow-xs'
                   : 'bg-slate-100 text-slate-600'
               }`}>
-                {hostQueue.length} Active in Queue
+                {hostQueue.filter((b) => b.type !== 'Self').length} Active in Queue
               </span>
             </div>
 
-            {hostQueue.length === 0 ? (
+            {hostQueue.filter((b) => b.type !== 'Self').length === 0 ? (
               <div className="py-8 text-center bg-slate-50/70 rounded-2xl border border-dashed border-slate-200">
                 <p className="text-xs text-slate-500 font-medium">
-                  No active requests or charging sessions right now. As travelers request your charger, they will appear here live.
+                  No active traveler requests or charging sessions right now. As travelers request your charger, they will appear here live.
                 </p>
               </div>
             ) : (
               <div className="space-y-4 pt-2">
-                {hostQueue.map((item) => {
+                {hostQueue
+                  .filter((b) => b.type !== 'Self')
+                  .map((item) => {
                   const isRequested = item.status === 'Requested';
                   const isAccepted = item.status === 'Accepted';
                   const isActive = item.status === 'Active';
@@ -362,6 +483,16 @@ export default function HostAnalytics({ user, setUser }) {
                             {item.traveler?.email || 'Registered EV Driver'} • Station: <strong>{station.name}</strong>
                           </p>
 
+                          <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 mt-1">
+                            <span className="bg-slate-100 px-2 py-0.5 rounded-md">
+                              {item.durationMinutes || 60} min
+                            </span>
+                            <span>•</span>
+                            <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-md font-bold">
+                              ₹{item.heldAmount || item.estimatedCost || 0} held
+                            </span>
+                          </div>
+
                           {isAccepted && (
                             <p className="text-xs font-semibold text-indigo-700 mt-1 flex items-center gap-1">
                               <MapPin className="w-3.5 h-3.5" />
@@ -372,7 +503,7 @@ export default function HostAnalytics({ user, setUser }) {
                       </div>
 
                       {/* State-specific Action Buttons */}
-                      <div className="flex items-center gap-2.5 w-full md:w-auto justify-end">
+                      <div className="flex items-center gap-2.5 w-full md:w-auto justify-end flex-wrap">
                         {/* 1. If Requested: Accept / Decline */}
                         {isRequested && (
                           <>
@@ -396,16 +527,27 @@ export default function HostAnalytics({ user, setUser }) {
                           </>
                         )}
 
-                        {/* 2. If Accepted: Reveal "Start Charging (User Connected)" */}
+                        {/* 2. If Accepted: Reveal "Start Charging" AND "Decline" */}
                         {isAccepted && (
-                          <button
-                            onClick={() => handleStartCharging(item._id)}
-                            disabled={isBusy}
-                            className="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-extrabold px-6 py-3 rounded-xl text-xs sm:text-sm shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition disabled:opacity-50"
-                          >
-                            <PlayCircle className="w-4 h-4 fill-current" />
-                            <span>{isBusy ? 'Starting Billing...' : 'Start Charging (User Connected)'}</span>
-                          </button>
+                          <>
+                            <button
+                              onClick={() => handleStartCharging(item._id)}
+                              disabled={isBusy}
+                              className="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition disabled:opacity-50"
+                            >
+                              <PlayCircle className="w-4 h-4 fill-current" />
+                              <span>{isBusy ? 'Starting Billing...' : 'Start Charging (User Connected)'}</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleDecline(item._id)}
+                              disabled={isBusy}
+                              className="bg-slate-200 hover:bg-rose-100 hover:text-rose-700 text-slate-700 font-semibold px-3.5 py-2.5 rounded-xl text-xs transition disabled:opacity-50"
+                            >
+                              <XCircle className="w-4 h-4" />
+                              <span>Decline</span>
+                            </button>
+                          </>
                         )}
 
                         {/* 3. If Active: Stop & Pay */}
@@ -451,14 +593,18 @@ export default function HostAnalytics({ user, setUser }) {
                 </div>
               </div>
 
-              <div className="mt-8 pt-6 border-t border-slate-800/80 grid grid-cols-2 gap-4 text-xs">
+              <div className="mt-8 pt-6 border-t border-slate-800/80 grid grid-cols-3 gap-4 text-xs">
                 <div>
                   <p className="text-slate-400 uppercase tracking-wider font-semibold">Completed Sessions</p>
                   <p className="text-xl font-bold text-white mt-0.5">{history.length}</p>
                 </div>
                 <div>
-                  <p className="text-slate-400 uppercase tracking-wider font-semibold">Total Minutes Powered</p>
+                  <p className="text-slate-400 uppercase tracking-wider font-semibold">Minutes Powered</p>
                   <p className="text-xl font-bold text-white mt-0.5">{totalMinutesHosted} mins</p>
+                </div>
+                <div>
+                  <p className="text-emerald-400 uppercase tracking-wider font-semibold">Own Usage</p>
+                  <p className="text-xl font-bold text-white mt-0.5">{ownUsage.totalOwnMinutes || 0} mins</p>
                 </div>
               </div>
             </div>

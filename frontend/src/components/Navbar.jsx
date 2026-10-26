@@ -76,20 +76,33 @@ export default function Navbar({ user, setUser }) {
         {/* User Pill & Wallet */}
         <div className="flex items-center gap-2 sm:gap-3">
           {/* Wallet Balance Badge */}
-          <div className="flex items-center bg-slate-100/90 border border-slate-200 rounded-full pl-3 pr-1.5 py-1 text-sm shadow-inner group">
-            <div className="flex items-center gap-1.5 text-slate-700 font-semibold mr-2">
-              <Wallet className="w-4 h-4 text-emerald-600" />
-              <span>₹{Math.floor(user.walletBalance || 0).toLocaleString()}</span>
-            </div>
-            <button
-              onClick={handleTopUp}
-              title="Add ₹500 test funds"
-              className="flex items-center gap-1 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white px-2 py-0.5 rounded-full text-xs font-medium transition shadow-xs"
-            >
-              <PlusCircle className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Top Up</span>
-            </button>
-          </div>
+          {(() => {
+            const held = user.heldBalance || 0;
+            const avail = typeof user.availableBalance === 'number' 
+              ? user.availableBalance 
+              : ((user.walletBalance || 0) - held);
+            return (
+              <div className="flex items-center bg-slate-100/90 border border-slate-200 rounded-full pl-3 pr-1.5 py-1 text-sm shadow-inner group">
+                <div className="flex items-center gap-1.5 text-slate-700 font-semibold mr-2">
+                  <Wallet className="w-4 h-4 text-emerald-600" />
+                  <span>₹{Math.floor(avail).toLocaleString()}</span>
+                  {held > 0 && (
+                    <span className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-1.5 py-0.2 rounded-full" title={`₹${held} currently held in reservation`}>
+                      ₹{Math.floor(held)} held
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={handleTopUp}
+                  title="Add ₹500 test funds"
+                  className="flex items-center gap-1 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white px-2 py-0.5 rounded-full text-xs font-medium transition shadow-xs"
+                >
+                  <PlusCircle className="w-3.5 h-3.5" />
+                  <span className="hidden md:inline">Top Up</span>
+                </button>
+              </div>
+            );
+          })()}
 
           {/* User Avatar & Logout */}
           <div className="flex items-center gap-2 pl-2 border-l border-slate-200">

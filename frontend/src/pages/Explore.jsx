@@ -23,8 +23,14 @@ export default function Explore({ user, setUser }) {
   const [cancellingBookingId, setCancellingBookingId] = useState(null);
   const [completedSummary, setCompletedSummary] = useState(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [selectedDurations, setSelectedDurations] = useState({});
 
   const authHeader = { headers: { Authorization: `Bearer ${user.token}` } };
+
+  // Calculate current traveler available balance
+  const userAvailable = typeof user?.availableBalance === 'number'
+    ? user.availableBalance
+    : Math.max(0, (user?.walletBalance || 0) - (user?.heldBalance || 0));
 
   // 1. Initial Load: Fetch stations and traveler bookings
   useEffect(() => {
@@ -78,8 +84,16 @@ export default function Explore({ user, setUser }) {
 
   const fetchTravelerBookings = async () => {
     try {
-      const res = await axios.get('http://localhost:5000/api/bookings/my-traveler-bookings', authHeader);
+      const [res, meRes] = await Promise.all([
+        axios.get('http://localhost:5000/api/bookings/my-traveler-bookings', authHeader),
+        axios.get('http://localhost:5000/api/auth/me', authHeader)
+      ]);
       setMyBookings(res.data || []);
+      if (meRes.data && setUser) {
+        const updated = { ...user, ...meRes.data };
+        localStorage.setItem('user', JSON.stringify(updated));
+        setUser(updated);
+      }
     } catch (err) {
       console.error('Error fetching traveler bookings:', err);
     }
@@ -94,17 +108,18 @@ export default function Explore({ user, setUser }) {
     }
   };
 
-  // STEP 1: Request a charger (can request multiple parallel stations)
+  // STEP 1: Request a charger with duration (30, 60, 90, 120 mins)
   const handleRequest = async (stationId) => {
     if (activeSession) {
       alert('You are already in an active charging session!');
       return;
     }
+    const durationMinutes = selectedDurations[stationId] || 60;
     setRequestingStationId(stationId);
     try {
       await axios.post(
         'http://localhost:5000/api/bookings/request',
-        { stationId },
+        { stationId, durationMinutes },
         authHeader
       );
       fetchTravelerBookings();
@@ -144,15 +159,22 @@ export default function Explore({ user, setUser }) {
         authHeader
       );
 
-      const { booking, durationMinutes, totalCost, walletBalance } = res.data;
+      const { booking, durationMinutes, totalCost, refundedAmount, walletBalance, availableBalance } = res.data;
 
       if (typeof walletBalance === 'number') {
-        const updated = { ...user, walletBalance };
+        const updated = {
+          ...user,
+          walletBalance,
+          availableBalance: typeof availableBalance === 'number' ? availableBalance : user.availableBalance,
+          heldBalance: (typeof walletBalance === 'number' && typeof availableBalance === 'number')
+            ? (walletBalance - availableBalance)
+            : user.heldBalance,
+        };
         localStorage.setItem('user', JSON.stringify(updated));
         setUser(updated);
       } else {
         const meRes = await axios.get('http://localhost:5000/api/auth/me', authHeader);
-        const updated = { ...user, walletBalance: meRes.data.walletBalance };
+        const updated = { ...user, ...meRes.data };
         localStorage.setItem('user', JSON.stringify(updated));
         setUser(updated);
       }
@@ -160,7 +182,8 @@ export default function Explore({ user, setUser }) {
       setCompletedSummary({
         stationName: booking?.station?.name || 'EV Charger',
         durationMinutes: durationMinutes || Math.max(1, Math.ceil(elapsedSeconds / 60)),
-        totalCost: totalCost || booking?.totalCost || 10,
+        totalCost: typeof totalCost === 'number' ? totalCost : (booking?.totalCost || 10),
+        refundedAmount: typeof refundedAmount === 'number' ? refundedAmount : 0,
       });
 
       fetchTravelerBookings();
@@ -183,6 +206,8 @@ export default function Explore({ user, setUser }) {
   const activeRatePerHour = activeSession?.station?.pricePerHour || 120;
   const elapsedMinutes = Math.max(1, Math.ceil(elapsedSeconds / 60));
   const estimatedLiveCost = Math.max(10, Math.round((elapsedMinutes * (activeRatePerHour / 60)) * 100) / 100);
+  const bookedMinutes = activeSession?.durationMinutes || 60;
+  const isOverDuration = elapsedMinutes > bookedMinutes;
 
   // Quick Seed Helper for evaluation
   const seedDemoCharger = async () => {
@@ -227,6 +252,8 @@ export default function Explore({ user, setUser }) {
                 <p className="text-xs text-emerald-100 flex items-center gap-2 mt-0.5">
                   <span>Rate: ₹{activeRatePerHour}/hr</span>
                   <span>•</span>
+                  <span>Booked: {bookedMinutes} min</span>
+                  <span>•</span>
                   <span>Min charge: ₹10</span>
                 </p>
               </div>
@@ -268,6 +295,12 @@ export default function Explore({ user, setUser }) {
               </button>
             </div>
           </div>
+          {/* Over Duration Non-blocking Indicator */}
+          {isOverDuration && (
+            <div className="bg-amber-500/90 text-amber-950 font-bold text-xs px-4 py-1.5 flex items-center justify-center gap-2 border-t border-amber-300/40">
+              <span>⚠️ Session has exceeded estimated duration ({bookedMinutes} min) — billing continues at tariff</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -282,8 +315,11 @@ export default function Explore({ user, setUser }) {
               </div>
               <div>
                 <h4 className="font-extrabold text-slate-900 text-lg">Charging Session Completed!</h4>
-                <p className="text-sm text-slate-600">
-                  Paid <span className="font-bold text-emerald-700">₹{completedSummary.totalCost}</span> for {completedSummary.durationMinutes} min(s) of charging at {completedSummary.stationName}. Your wallet has been updated.
+                <p className="text-sm text-slate-700 mt-0.5">
+                  Charged: <span className="font-extrabold text-emerald-800">₹{completedSummary.totalCost}</span> | Refunded: <span className="font-extrabold text-emerald-800">₹{completedSummary.refundedAmount || 0}</span>
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Duration: {completedSummary.durationMinutes} min(s) at {completedSummary.stationName}. Your wallet has been settled.
                 </p>
               </div>
             </div>
@@ -368,9 +404,27 @@ export default function Explore({ user, setUser }) {
                         <p className="text-xs text-slate-500 mt-0.5">
                           {b.station?.address || 'Residential EV Point'} • Hosted by <strong>{b.host?.name || 'Resident'}</strong>
                         </p>
-                        <p className="text-xs font-bold text-slate-700 mt-1">
-                          Tariff: ₹{b.station?.pricePerHour || 120}/hr
-                        </p>
+                        <div className="flex items-center gap-2.5 text-xs font-bold text-slate-700 mt-1.5 flex-wrap">
+                          <span>Tariff: ₹{b.station?.pricePerHour || 120}/hr</span>
+                          <span>•</span>
+                          <span>Duration: {b.durationMinutes || 60} min</span>
+                          {isAccepted && (
+                            <>
+                              <span>•</span>
+                              <span className="text-indigo-800 bg-indigo-100 px-2 py-0.5 rounded-md font-extrabold">
+                                ₹{b.heldAmount || b.estimatedCost || 0} held
+                              </span>
+                            </>
+                          )}
+                          {isRequested && (
+                            <>
+                              <span>•</span>
+                              <span className="text-amber-800 bg-amber-100 px-2 py-0.5 rounded-md font-medium">
+                                Est: ₹{b.estimatedCost || 0}
+                              </span>
+                            </>
+                          )}
+                        </div>
                       </div>
 
                       {/* Action Button */}
@@ -486,6 +540,9 @@ export default function Explore({ user, setUser }) {
               const isAlreadyRequested = Boolean(userBookingForStation);
               const isRequesting = requestingStationId === s._id;
               const hasActiveSession = Boolean(activeSession);
+              const selectedDuration = selectedDurations[s._id] || 60;
+              const estimatedCost = Math.max(10, Math.round((selectedDuration * (s.pricePerHour / 60)) * 100) / 100);
+              const isLowBalance = userAvailable < estimatedCost;
 
               return (
                 <div
@@ -527,8 +584,32 @@ export default function Explore({ user, setUser }) {
                     )}
                   </div>
 
+                  {/* Duration Selector */}
+                  <div className="mt-4 pt-3 border-t border-slate-100">
+                    <div className="flex items-center justify-between text-xs mb-2">
+                      <span className="font-bold text-slate-700">Select Duration</span>
+                      <span className="text-slate-500 font-medium">Est: <strong className="text-slate-900">₹{estimatedCost}</strong></span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[30, 60, 90, 120].map((mins) => (
+                        <button
+                          key={mins}
+                          type="button"
+                          onClick={() => setSelectedDurations((prev) => ({ ...prev, [s._id]: mins }))}
+                          className={`py-1.5 px-2 rounded-xl text-xs font-bold transition text-center ${
+                            selectedDuration === mins
+                              ? 'bg-slate-900 text-white shadow-xs'
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          {mins}m
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   {/* Price & Request Button */}
-                  <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
+                  <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
                     <div>
                       <span className="text-xs text-slate-400 font-medium block">Tariff</span>
                       <div className="flex items-baseline gap-1">
@@ -545,27 +626,34 @@ export default function Explore({ user, setUser }) {
                         <span>{userBookingForStation.status}</span>
                       </span>
                     ) : (
-                      <button
-                        onClick={() => handleRequest(s._id)}
-                        disabled={isRequesting || hasActiveSession}
-                        className={`px-5 py-2.5 rounded-xl font-bold text-sm shadow-md transition flex items-center gap-2 ${
-                          hasActiveSession
-                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed shadow-none'
-                            : 'bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white shadow-emerald-600/25'
-                        }`}
-                      >
-                        {isRequesting ? (
-                          <>
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                            <span>Requesting...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Zap className="w-4 h-4 fill-current" />
-                            <span>Request</span>
-                          </>
+                      <div className="flex flex-col items-end">
+                        <button
+                          onClick={() => handleRequest(s._id)}
+                          disabled={isRequesting || hasActiveSession || isLowBalance}
+                          className={`px-5 py-2.5 rounded-xl font-bold text-sm shadow-md transition flex items-center gap-2 ${
+                            hasActiveSession || isLowBalance
+                              ? 'bg-slate-100 text-slate-400 cursor-not-allowed shadow-none border border-slate-200'
+                              : 'bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white shadow-emerald-600/25'
+                          }`}
+                        >
+                          {isRequesting ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              <span>Requesting...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="w-4 h-4 fill-current" />
+                              <span>{isLowBalance ? 'Low Balance' : 'Request'}</span>
+                            </>
+                          )}
+                        </button>
+                        {isLowBalance && !hasActiveSession && (
+                          <span className="text-[10px] text-rose-500 font-semibold mt-1 text-right">
+                            Low balance — ₹{userAvailable} available, ₹{estimatedCost} required
+                          </span>
                         )}
-                      </button>
+                      </div>
                     )}
                   </div>
                 </div>

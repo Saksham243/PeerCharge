@@ -12,7 +12,17 @@ exports.register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
     const user = await User.create({ name, email, password: hashedPassword });
-    res.status(201).json({ _id: user._id, name: user.name, email: user.email, walletBalance: user.walletBalance, token: generateToken(user._id) });
+    const held = user.heldBalance || 0;
+    const availableBalance = user.walletBalance - held;
+    res.status(201).json({ 
+      _id: user._id, 
+      name: user.name, 
+      email: user.email, 
+      walletBalance: user.walletBalance,
+      heldBalance: held,
+      availableBalance,
+      token: generateToken(user._id) 
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -23,7 +33,17 @@ exports.login = async (req, res) => {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
     if (user && (await bcrypt.compare(password, user.password))) {
-      res.json({ _id: user._id, name: user.name, email: user.email, walletBalance: user.walletBalance, token: generateToken(user._id) });
+      const held = user.heldBalance || 0;
+      const availableBalance = user.walletBalance - held;
+      res.json({ 
+        _id: user._id, 
+        name: user.name, 
+        email: user.email, 
+        walletBalance: user.walletBalance,
+        heldBalance: held,
+        availableBalance,
+        token: generateToken(user._id) 
+      });
     } else {
       res.status(401).json({ message: 'Invalid email or password' });
     }
@@ -36,7 +56,12 @@ exports.getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select('-password');
     if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json(user);
+    const held = user.heldBalance || 0;
+    const availableBalance = user.walletBalance - held;
+    const userObj = user.toObject();
+    userObj.availableBalance = availableBalance;
+    userObj.heldBalance = held;
+    res.json(userObj);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
