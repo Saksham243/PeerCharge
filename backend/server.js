@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const connectDB = require('./config/db');
+const User = require('./models/User');
 
 const authRoutes = require('./routes/authRoutes');
 const stationRoutes = require('./routes/stationRoutes');
@@ -9,7 +10,13 @@ const bookingRoutes = require('./routes/bookingRoutes');
 
 const app = express();
 
-connectDB();
+connectDB().then(async () => {
+  try {
+    await User.updateMany({ heldBalance: { $exists: false } }, { $set: { heldBalance: 0 } });
+  } catch (err) {
+    // quiet backfill
+  }
+});
 
 app.use(cors());
 app.use(express.json());

@@ -89,11 +89,16 @@ export default function HostAnalytics({ user, setUser }) {
       // 5. Sync user balances
       const meRes = await axios.get('http://localhost:5000/api/auth/me', authHeader);
       if (meRes.data && setUser) {
+        const held = meRes.data.heldBalance || 0;
+        const wallet = meRes.data.walletBalance || 0;
+        const available = typeof meRes.data.availableBalance === 'number'
+          ? meRes.data.availableBalance
+          : wallet - held;
         const updated = {
           ...user,
-          walletBalance: meRes.data.walletBalance,
-          heldBalance: meRes.data.heldBalance,
-          availableBalance: meRes.data.availableBalance,
+          walletBalance: wallet,
+          heldBalance: held,
+          availableBalance: available,
         };
         localStorage.setItem('user', JSON.stringify(updated));
         setUser(updated);

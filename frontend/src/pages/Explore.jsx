@@ -90,7 +90,17 @@ export default function Explore({ user, setUser }) {
       ]);
       setMyBookings(res.data || []);
       if (meRes.data && setUser) {
-        const updated = { ...user, ...meRes.data };
+        const held = meRes.data.heldBalance || 0;
+        const wallet = meRes.data.walletBalance || 0;
+        const available = typeof meRes.data.availableBalance === 'number'
+          ? meRes.data.availableBalance
+          : wallet - held;
+        const updated = {
+          ...user,
+          walletBalance: wallet,
+          heldBalance: held,
+          availableBalance: available,
+        };
         localStorage.setItem('user', JSON.stringify(updated));
         setUser(updated);
       }
@@ -162,19 +172,33 @@ export default function Explore({ user, setUser }) {
       const { booking, durationMinutes, totalCost, refundedAmount, walletBalance, availableBalance } = res.data;
 
       if (typeof walletBalance === 'number') {
+        const held = typeof availableBalance === 'number'
+          ? Math.max(0, walletBalance - availableBalance)
+          : (user.heldBalance || 0);
+        const available = typeof availableBalance === 'number'
+          ? availableBalance
+          : walletBalance - held;
         const updated = {
           ...user,
           walletBalance,
-          availableBalance: typeof availableBalance === 'number' ? availableBalance : user.availableBalance,
-          heldBalance: (typeof walletBalance === 'number' && typeof availableBalance === 'number')
-            ? (walletBalance - availableBalance)
-            : user.heldBalance,
+          heldBalance: held,
+          availableBalance: available,
         };
         localStorage.setItem('user', JSON.stringify(updated));
         setUser(updated);
       } else {
         const meRes = await axios.get('http://localhost:5000/api/auth/me', authHeader);
-        const updated = { ...user, ...meRes.data };
+        const held = meRes.data.heldBalance || 0;
+        const wallet = meRes.data.walletBalance || 0;
+        const available = typeof meRes.data.availableBalance === 'number'
+          ? meRes.data.availableBalance
+          : wallet - held;
+        const updated = {
+          ...user,
+          walletBalance: wallet,
+          heldBalance: held,
+          availableBalance: available,
+        };
         localStorage.setItem('user', JSON.stringify(updated));
         setUser(updated);
       }

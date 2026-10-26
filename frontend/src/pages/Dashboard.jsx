@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { 
   Compass, 
@@ -30,7 +30,17 @@ export default function Dashboard({ user, setUser }) {
         // 1. Refresh user wallet balance
         const userRes = await axios.get('http://localhost:5000/api/auth/me', config);
         if (userRes.data) {
-          const updated = { ...user, walletBalance: userRes.data.walletBalance };
+          const held = userRes.data.heldBalance || 0;
+          const wallet = userRes.data.walletBalance || 0;
+          const available = typeof userRes.data.availableBalance === 'number'
+            ? userRes.data.availableBalance
+            : wallet - held;
+          const updated = {
+            ...user,
+            walletBalance: wallet,
+            heldBalance: held,
+            availableBalance: available,
+          };
           localStorage.setItem('user', JSON.stringify(updated));
           setUser(updated);
         }
@@ -70,7 +80,10 @@ export default function Dashboard({ user, setUser }) {
         </div>
 
         {/* Live Wallet Pill Badge */}
-        <div className="flex items-center gap-3 self-start md:self-auto bg-gradient-to-br from-slate-900 to-slate-800 text-white px-5 py-3.5 rounded-2xl shadow-md border border-slate-700/60">
+        <Link
+          to="/wallet"
+          className="flex items-center gap-3 self-start md:self-auto bg-gradient-to-br from-slate-900 to-slate-800 text-white px-5 py-3.5 rounded-2xl shadow-md border border-slate-700/60 hover:border-emerald-500/40 transition"
+        >
           <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
             <Wallet className="w-5 h-5" />
           </div>
@@ -79,8 +92,9 @@ export default function Dashboard({ user, setUser }) {
             <p className="text-xl font-bold tracking-tight text-white">
               ₹{Math.floor(user.walletBalance || 0).toLocaleString()}
             </p>
+            <span className="text-[11px] font-semibold text-emerald-400">Add money</span>
           </div>
-        </div>
+        </Link>
       </div>
 
       {/* Active Charging / Pending / Accepted Banner Alert */}

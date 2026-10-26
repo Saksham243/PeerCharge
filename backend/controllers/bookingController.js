@@ -3,6 +3,25 @@ const Booking = require('../models/Booking');
 const Station = require('../models/Station');
 const User = require('../models/User');
 
+function toUserId(ref) {
+  if (!ref) return ref;
+  return ref._id ? ref._id : ref;
+}
+
+async function releaseHeldBalance(userId, amount, session) {
+  const requested = Number(amount);
+  if (!userId || !Number.isFinite(requested) || requested <= 0) return;
+  const query = User.findById(userId);
+  if (session) query.session(session);
+  const user = await query;
+  const currentHeld = Number(user?.heldBalance);
+  const held = Number.isFinite(currentHeld) ? currentHeld : 0;
+  const decrement = Math.min(requested, held);
+  if (decrement <= 0) return;
+  const opts = session ? { session } : {};
+  await User.findByIdAndUpdate(userId, { $inc: { heldBalance: -decrement } }, opts);
+}
+
 // =============================================================================
 // STEP 1: PARALLEL REQUESTS (UPFRONT PAYMENT ESTIMATION)
 // Traveler can request multiple stations simultaneously.
@@ -105,18 +124,35 @@ exports.acceptBooking = async (req, res) => {
       return res.status(404).json({ message: 'Requested booking not found or already processed' });
     }
 
+    const travelerId = toUserId(booking.traveler);
+
+    let amount = Number(booking.estimatedCost);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      const stationForCost = await Station.findById(booking.station);
+      const duration = Number(booking.durationMinutes);
+      const durationMinutes = Number.isFinite(duration) && duration > 0 ? duration : 60;
+      amount = Math.max(10, Math.round((durationMinutes * ((stationForCost?.pricePerHour || 0) / 60)) * 100) / 100);
+      booking.estimatedCost = amount;
+      await booking.save();
+    }
+
     // 1. Place the hold atomically on traveler's wallet
     const travelerUser = await User.findOneAndUpdate(
       {
-        _id: booking.traveler,
+        _id: travelerId,
         $expr: {
           $gte: [
-            { $subtract: ['$walletBalance', '$heldBalance'] },
-            booking.estimatedCost
+            {
+              $subtract: [
+                { $ifNull: ['$walletBalance', 0] },
+                { $ifNull: ['$heldBalance', 0] }
+              ]
+            },
+            amount
           ]
         }
       },
-      { $inc: { heldBalance: booking.estimatedCost } },
+      { $inc: { heldBalance: amount } },
       { new: true }
     );
 
@@ -133,9 +169,7 @@ exports.acceptBooking = async (req, res) => {
 
     if (!station) {
       // Undo hold if station is no longer Available
-      await User.findByIdAndUpdate(booking.traveler, {
-        $inc: { heldBalance: -booking.estimatedCost }
-      });
+      await releaseHeldBalance(travelerId, amount);
       return res.status(400).json({
         message: 'Your station is already reserved or occupied by another booking'
       });
@@ -143,7 +177,7 @@ exports.acceptBooking = async (req, res) => {
 
     // 3. Mark booking as Accepted and record heldAmount
     booking.status = 'Accepted';
-    booking.heldAmount = booking.estimatedCost;
+    booking.heldAmount = amount;
     await booking.save();
 
     const populated = await Booking.findById(booking._id)
@@ -184,9 +218,7 @@ exports.declineBooking = async (req, res) => {
     // If it was Accepted, release hold and revert station to Available
     if (wasAccepted) {
       if (heldToRelease > 0) {
-        await User.findByIdAndUpdate(booking.traveler, {
-          $inc: { heldBalance: -heldToRelease }
-        });
+        await releaseHeldBalance(toUserId(booking.traveler), heldToRelease);
       }
       await Station.findByIdAndUpdate(booking.station, { status: 'Available' });
     }
@@ -246,11 +278,7 @@ exports.startCharging = async (req, res) => {
             // Release hold and revert station if it was Accepted
             if (other.status === 'Accepted') {
               if (other.heldAmount > 0) {
-                await User.findByIdAndUpdate(
-                  other.traveler,
-                  { $inc: { heldBalance: -other.heldAmount } },
-                  { session }
-                );
+                await releaseHeldBalance(toUserId(other.traveler), other.heldAmount, session);
               }
               await Station.findByIdAndUpdate(
                 other.station,
@@ -288,7 +316,7 @@ exports.startCharging = async (req, res) => {
           for (const other of otherBookings) {
             if (other.status === 'Accepted') {
               if (other.heldAmount > 0) {
-                await User.findByIdAndUpdate(other.traveler, { $inc: { heldBalance: -other.heldAmount } });
+                await releaseHeldBalance(toUserId(other.traveler), other.heldAmount);
               }
               await Station.findByIdAndUpdate(other.station, { status: 'Available' });
             }
@@ -379,17 +407,16 @@ exports.stopBooking = async (req, res) => {
 
     // Charge min(actualCost, walletBalance) so wallet never goes negative
     const traveler = await User.findById(booking.traveler);
-    const chargedAmount = Math.max(0, Math.min(actualCost, traveler ? traveler.walletBalance : actualCost));
+    const walletBalance = traveler ? (traveler.walletBalance || 0) : actualCost;
+    const chargedAmount = Math.max(0, Math.min(actualCost, walletBalance));
     const heldAmount = booking.heldAmount || 0;
     const refundedAmount = Math.max(0, Math.round((heldAmount - chargedAmount) * 100) / 100);
 
-    // Deduct chargedAmount and release full heldAmount from traveler
+    // Deduct chargedAmount and release hold without driving heldBalance below 0
     await User.findByIdAndUpdate(booking.traveler, {
-      $inc: {
-        walletBalance: -chargedAmount,
-        heldBalance: -heldAmount
-      }
+      $inc: { walletBalance: -chargedAmount }
     });
+    await releaseHeldBalance(toUserId(booking.traveler), heldAmount);
 
     // Credit host with amount actually charged
     await User.findByIdAndUpdate(booking.host, {
@@ -571,9 +598,7 @@ exports.cancelBooking = async (req, res) => {
     // If it was Accepted, release hold and revert Station to Available
     if (wasAccepted) {
       if (heldToRelease > 0) {
-        await User.findByIdAndUpdate(booking.traveler, {
-          $inc: { heldBalance: -heldToRelease }
-        });
+        await releaseHeldBalance(toUserId(booking.traveler), heldToRelease);
       }
       await Station.findByIdAndUpdate(booking.station, { status: 'Available' });
     }

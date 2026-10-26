@@ -5,6 +5,7 @@ import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import Explore from './components/Explore';
 import HostAnalytics from './components/HostAnalytics';
+import AddMoney from './pages/AddMoney';
 
 export default function App() {
   const [user, setUser] = useState(() => {
@@ -26,6 +27,7 @@ export default function App() {
               <Route path="/dashboard" element={<Dashboard user={user} setUser={setUser} />} />
               <Route path="/explore" element={<Explore user={user} setUser={setUser} />} />
               <Route path="/my-charger" element={<HostAnalytics user={user} setUser={setUser} />} />
+              <Route path="/wallet" element={<AddMoney user={user} setUser={setUser} />} />
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>

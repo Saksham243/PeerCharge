@@ -1,6 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Zap, Compass, BatteryCharging, LogOut, PlusCircle, Wallet } from 'lucide-react';
-import axios from 'axios';
 
 export default function Navbar({ user, setUser }) {
   const location = useLocation();
@@ -10,21 +9,6 @@ export default function Navbar({ user, setUser }) {
     localStorage.removeItem('user');
     setUser(null);
     navigate('/login');
-  };
-
-  const handleTopUp = async () => {
-    try {
-      const res = await axios.post(
-        'http://localhost:5000/api/auth/topup',
-        { amount: 500 },
-        { headers: { Authorization: `Bearer ${user.token}` } }
-      );
-      const updated = { ...user, walletBalance: res.data.walletBalance };
-      localStorage.setItem('user', JSON.stringify(updated));
-      setUser(updated);
-    } catch (err) {
-      console.error('Failed to top up wallet', err);
-    }
   };
 
   const navLinks = [
@@ -92,14 +76,14 @@ export default function Navbar({ user, setUser }) {
                     </span>
                   )}
                 </div>
-                <button
-                  onClick={handleTopUp}
-                  title="Add ₹500 test funds"
+                <Link
+                  to="/wallet"
+                  title="Add money"
                   className="flex items-center gap-1 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white px-2 py-0.5 rounded-full text-xs font-medium transition shadow-xs"
                 >
                   <PlusCircle className="w-3.5 h-3.5" />
                   <span className="hidden md:inline">Top Up</span>
-                </button>
+                </Link>
               </div>
             );
           })()}
