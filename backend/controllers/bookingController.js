@@ -56,6 +56,9 @@ exports.requestBooking = async (req, res) => {
     if (!station) {
       return res.status(400).json({ message: 'Station is currently not available for booking' });
     }
+    if (station.isListed === false) {
+      return res.status(400).json({ message: 'This charger is no longer listed' });
+    }
 
     // FEATURE 1: Caller cannot request their own station
     if (station.host.toString() === req.user._id.toString()) {
@@ -162,7 +165,7 @@ exports.acceptBooking = async (req, res) => {
 
     // 2. Reserve the station
     const station = await Station.findOneAndUpdate(
-      { _id: booking.station, status: 'Available' },
+      { _id: booking.station, status: 'Available', isListed: { $ne: false } },
       { status: 'Reserved' },
       { new: true }
     );
@@ -460,10 +463,13 @@ exports.startSelfSession = async (req, res) => {
     if (!stationDoc) {
       return res.status(400).json({ message: 'You do not own a charging station' });
     }
+    if (stationDoc.isListed === false) {
+      return res.status(400).json({ message: 'List your charger first' });
+    }
 
     // Try to atomically set Available station to Occupied
     const station = await Station.findOneAndUpdate(
-      { _id: stationDoc._id, host: req.user._id, status: 'Available' },
+      { _id: stationDoc._id, host: req.user._id, status: 'Available', isListed: { $ne: false } },
       { status: 'Occupied' },
       { new: true }
     );

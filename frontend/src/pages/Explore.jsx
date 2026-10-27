@@ -74,9 +74,10 @@ export default function Explore({ user, setUser }) {
         axios.get('http://localhost:5000/api/stations/nearby', authHeader),
         minDelay
       ]);
-      setStations(res.data);
+      setStations(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
       console.error('Error fetching stations:', err);
+      setStations([]);
     } finally {
       setLoadingStations(false);
     }
@@ -232,24 +233,6 @@ export default function Explore({ user, setUser }) {
   const estimatedLiveCost = Math.max(10, Math.round((elapsedMinutes * (activeRatePerHour / 60)) * 100) / 100);
   const bookedMinutes = activeSession?.durationMinutes || 60;
   const isOverDuration = elapsedMinutes > bookedMinutes;
-
-  // Quick Seed Helper for evaluation
-  const seedDemoCharger = async () => {
-    try {
-      await axios.post(
-        'http://localhost:5000/api/stations',
-        {
-          name: `RapidCharge Hub #${Math.floor(Math.random() * 899 + 100)}`,
-          pricePerHour: 140,
-          address: 'Main Market, Dehradun',
-        },
-        authHeader
-      );
-      fetchStations();
-    } catch (err) {
-      alert('Could not seed demo charger');
-    }
-  };
 
   return (
     <div className="min-h-screen pb-24">
@@ -512,15 +495,9 @@ export default function Explore({ user, setUser }) {
           </button>
         </div>
 
-        {/* Counter & Seeder */}
-        <div className="flex items-center justify-between text-xs text-slate-500 px-1">
-          <span><b>{stations.length}</b> verified chargers currently online and available</span>
-          <button 
-            onClick={seedDemoCharger}
-            className="text-emerald-600 hover:text-emerald-700 font-semibold hover:underline flex items-center gap-1"
-          >
-            <span>+ Seed Demo Charger</span>
-          </button>
+        {/* Counter */}
+        <div className="flex items-center text-xs text-slate-500 px-1">
+          <span><b>{stations.length}</b> {stations.length === 1 ? 'charger' : 'chargers'} available</span>
         </div>
 
         {/* 1-Second Loading State */}
@@ -544,16 +521,16 @@ export default function Explore({ user, setUser }) {
               <Zap className="w-8 h-8" />
             </div>
             <div>
-              <h3 className="text-xl font-bold text-slate-900">No Available Chargers</h3>
+              <h3 className="text-xl font-bold text-slate-900">No chargers available right now</h3>
               <p className="text-sm text-slate-500 mt-1">
-                All network chargers are currently reserved or occupied.
+                No other hosts have an available charger at the moment. Check back soon, or tap Refresh.
               </p>
             </div>
             <button
-              onClick={seedDemoCharger}
+              onClick={fetchStations}
               className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-md shadow-emerald-600/20 transition"
             >
-              Seed an Available Demo Charger
+              Refresh Chargers
             </button>
           </div>
         ) : (

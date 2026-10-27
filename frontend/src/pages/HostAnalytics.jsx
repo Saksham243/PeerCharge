@@ -14,11 +14,16 @@ import {
   Sparkles,
   Hourglass,
   Check,
-  PlayCircle
+  PlayCircle,
+  Pencil,
+  Trash2
 } from 'lucide-react';
 
 export default function HostAnalytics({ user, setUser }) {
-  const [station, setStation] = useState(null);
+  // Raw record from the server (may be an unlisted/removed charger, kept for history and re-listing)
+  const [stationRecord, setStationRecord] = useState(null);
+  // A removed (unlisted) charger counts as "no charger listed"
+  const station = stationRecord && stationRecord.isListed !== false ? stationRecord : null;
   const [hostQueue, setHostQueue] = useState([]);
   const [history, setHistory] = useState([]);
   const [ownUsage, setOwnUsage] = useState({ totalOwnMinutes: 0, sessions: [] });
@@ -71,7 +76,7 @@ export default function HostAnalytics({ user, setUser }) {
     try {
       // 1. Fetch user station
       const stationRes = await axios.get('http://localhost:5000/api/stations/mine', authHeader);
-      setStation(stationRes.data);
+      setStationRecord(stationRes.data);
 
       // 2. Fetch active host bookings (Requested, Accepted, Active)
       const queueRes = await axios.get('http://localhost:5000/api/bookings/host-dashboard-bookings', authHeader);
@@ -118,7 +123,7 @@ export default function HostAnalytics({ user, setUser }) {
         axios.get('http://localhost:5000/api/bookings/my-own-usage', authHeader),
       ]);
       setHostQueue(queueRes.data || []);
-      setStation(stationRes.data);
+      setStationRecord(stationRes.data);
       setOwnUsage(ownRes.data || { totalOwnMinutes: 0, sessions: [] });
     } catch (err) {
       // silent background poll
@@ -224,6 +229,36 @@ export default function HostAnalytics({ user, setUser }) {
     return `${hrs > 0 ? `${hrs.toString().padStart(2, '0')}:` : ''}${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Opens the listing modal. Pre-fills from the current (or previously removed) charger.
+  const openStationModal = () => {
+    if (stationRecord) {
+      setFormData({
+        name: stationRecord.name || '',
+        pricePerHour: stationRecord.pricePerHour ?? 150,
+        address: stationRecord.address || '',
+      });
+    }
+    setShowCreateModal(true);
+  };
+
+  // Remove (unlist) the charger. History and earnings are kept.
+  const handleRemoveStation = async () => {
+    const confirmed = window.confirm(
+      'Remove your charger from the network? Pending traveler requests will be canceled. You can list it again later.'
+    );
+    if (!confirmed) return;
+
+    setActionInProgressId('remove-station');
+    try {
+      await axios.delete('http://localhost:5000/api/stations/mine', authHeader);
+      await fetchHostData();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to remove charger');
+    } finally {
+      setActionInProgressId(null);
+    }
+  };
+
   const handleCreateStation = async (e) => {
     e.preventDefault();
     setCreating(true);
@@ -237,11 +272,11 @@ export default function HostAnalytics({ user, setUser }) {
         },
         authHeader
       );
-      setStation(res.data);
+      setStationRecord(res.data);
       setShowCreateModal(false);
       fetchHostData();
     } catch (err) {
-      alert(err.response?.data?.message || 'Failed to list charger');
+      alert(err.response?.data?.message || (station ? 'Failed to update charger' : 'Failed to list charger'));
     } finally {
       setCreating(false);
     }
@@ -284,7 +319,7 @@ export default function HostAnalytics({ user, setUser }) {
 
           <div className="mt-8">
             <button
-              onClick={() => setShowCreateModal(true)}
+              onClick={openStationModal}
               className="bg-slate-900 hover:bg-slate-800 text-white font-bold px-8 py-3.5 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 active:scale-95 inline-flex items-center gap-2 text-sm sm:text-base"
             >
               <Plus className="w-5 h-5 text-emerald-400" />
@@ -325,6 +360,11 @@ export default function HostAnalytics({ user, setUser }) {
               <p className="text-sm text-slate-500">
                 {station.address || 'Residential EV Point'} • Rate: <strong>₹{station.pricePerHour}/hr</strong>
               </p>
+              {station.status !== 'Available' && (
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Editing and removing are paused while a booking is reserved or in progress.
+                </p>
+              )}
             </div>
 
             <div className="flex items-center gap-3 flex-wrap">
@@ -358,6 +398,26 @@ export default function HostAnalytics({ user, setUser }) {
                   </p>
                 </div>
               </div>
+
+              {/* Edit / Remove listing (only while the station is Available) */}
+              <button
+                onClick={openStationModal}
+                disabled={station.status !== 'Available'}
+                title={station.status === 'Available' ? 'Edit listing' : 'Finish or release the current booking to edit'}
+                className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-bold px-4 py-2.5 rounded-2xl text-xs flex items-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Pencil className="w-4 h-4" />
+                <span>Edit listing</span>
+              </button>
+              <button
+                onClick={handleRemoveStation}
+                disabled={station.status !== 'Available' || actionInProgressId === 'remove-station'}
+                title={station.status === 'Available' ? 'Remove charger from the network' : 'Finish or release the current booking to remove'}
+                className="bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 font-bold px-4 py-2.5 rounded-2xl text-xs flex items-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>{actionInProgressId === 'remove-station' ? 'Removing...' : 'Remove charger'}</span>
+              </button>
             </div>
           </div>
 
@@ -767,8 +827,10 @@ export default function HostAnalytics({ user, setUser }) {
                   <BatteryCharging className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-extrabold text-slate-900 text-lg">List Your Charger</h3>
-                  <p className="text-xs text-slate-500">Make your home plug available on the network</p>
+                  <h3 className="font-extrabold text-slate-900 text-lg">{station ? 'Edit Your Charger' : 'List Your Charger'}</h3>
+                  <p className="text-xs text-slate-500">
+                    {station ? 'Update the details travelers see' : 'Make your home plug available on the network'}
+                  </p>
                 </div>
               </div>
               <button
@@ -807,7 +869,10 @@ export default function HostAnalytics({ user, setUser }) {
                   onChange={(e) => setFormData({ ...formData, pricePerHour: e.target.value })}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-emerald-500 focus:ring-1 focus:ring-emerald-500"
                 />
-                <p className="text-[11px] text-slate-400 mt-1">Recommended: ₹100 - ₹200/hr</p>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Recommended: ₹100 - ₹200/hr
+                  {station ? '. Changing the price cancels any pending requests.' : ''}
+                </p>
               </div>
 
               <div>
@@ -837,7 +902,9 @@ export default function HostAnalytics({ user, setUser }) {
                   disabled={creating}
                   className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-6 py-2.5 rounded-xl text-xs shadow-md shadow-emerald-600/20 transition disabled:opacity-50"
                 >
-                  {creating ? 'Publishing...' : 'Publish Charger'}
+                  {creating
+                    ? (station ? 'Saving...' : 'Publishing...')
+                    : (station ? 'Save Changes' : 'Publish Charger')}
                 </button>
               </div>
             </form>

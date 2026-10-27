@@ -51,7 +51,8 @@ export default function Dashboard({ user, setUser }) {
 
         // 3. Check if user already has a station
         const stationRes = await axios.get('http://localhost:5000/api/stations/mine', config);
-        setMyStation(stationRes.data);
+        // A removed (unlisted) charger counts as no charger
+        setMyStation(stationRes.data && stationRes.data.isListed !== false ? stationRes.data : null);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
       } finally {

@@ -24,21 +24,21 @@ export default function Login({ setUser }) {
     }
   };
 
-  const fillDemoAccount = (role) => {
-    if (role === 'traveler') {
-      setFormData({
-        name: 'Rahul Sharma',
-        email: 'rahul@example.com',
-        password: 'password123',
-      });
-    } else {
-      setFormData({
-        name: 'Amit Verma',
-        email: 'amit@example.com',
-        password: 'password123',
-      });
-    }
-  };
+  // const fillDemoAccount = (role) => {
+  //   if (role === 'traveler') {
+  //     setFormData({
+  //       name: 'Rahul Sharma',
+  //       email: 'rahul@example.com',
+  //       password: 'password123',
+  //     });
+  //   } else {
+  //     setFormData({
+  //       name: 'Amit Verma',
+  //       email: 'amit@example.com',
+  //       password: 'password123',
+  //     });
+  //   }
+  // };
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
@@ -151,7 +151,7 @@ export default function Login({ setUser }) {
           </button>
         </form>
 
-        {/* Demo Accounts Prefill for Evaluator */}
+        {/* Demo Accounts Prefill for Evaluator
         <div className="mt-6 pt-5 border-t border-slate-100">
           <p className="text-[11px] text-slate-400 text-center font-medium mb-2.5">
             Quick Demo Autofill (Click to populate)
@@ -172,12 +172,12 @@ export default function Login({ setUser }) {
               Demo Host
             </button>
           </div>
-        </div>
+        </div> */}
 
-        <div className="mt-4 flex items-center justify-center gap-1.5 text-[11px] text-slate-400">
+        {/* <div className="mt-4 flex items-center justify-center gap-1.5 text-[11px] text-slate-400">
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
           <span>Secured with JWT & bcryptjs</span>
-        </div>
+        </div> */}
       </div>
     </div>
   );
