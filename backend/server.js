@@ -19,7 +19,7 @@ connectDB().then(async () => {
 });
 
 app.use(cors({
-    origin : 'http://localhost:5173',
+    origin : ['http://localhost:5173',"https://peer-charge-hazel.vercel.app"],
     credentials:true,
     methods:['GET','POST','PUT','DELETE','PATCH'],
     allowedHeaders:['Content-type' , 'Authorization']
