@@ -214,7 +214,7 @@ export default function Dashboard({ user, setUser }) {
             <div className="mt-5 flex flex-wrap gap-2 text-xs">
               <span className="px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-medium">📊 Earnings Analytics</span>
               <span className="px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-medium">🛡️ Host Command Center</span>
-              <span className="px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-medium">⚡ 100% P2P Share</span>
+              {/* <span className="px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-medium">⚡ 100% P2P Share</span> */}
             </div>
           </div>
 
