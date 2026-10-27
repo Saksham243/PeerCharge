@@ -28,7 +28,7 @@ export default function Dashboard({ user, setUser }) {
         const config = { headers: { Authorization: `Bearer ${user.token}` } };
         
         // 1. Refresh user wallet balance
-        const userRes = await axios.get('http://localhost:5000/api/auth/me', config);
+        const userRes = await axios.get('https://peercharge.onrender.com/api/auth/me', config);
         if (userRes.data) {
           const held = userRes.data.heldBalance || 0;
           const wallet = userRes.data.walletBalance || 0;
@@ -46,11 +46,11 @@ export default function Dashboard({ user, setUser }) {
         }
 
         // 2. Check active booking
-        const bookingRes = await axios.get('http://localhost:5000/api/bookings/active', config);
+        const bookingRes = await axios.get('https://peercharge.onrender.com/api/bookings/active', config);
         setActiveSession(bookingRes.data);
 
         // 3. Check if user already has a station
-        const stationRes = await axios.get('http://localhost:5000/api/stations/mine', config);
+        const stationRes = await axios.get('https://peercharge.onrender.com/api/stations/mine', config);
         // A removed (unlisted) charger counts as no charger
         setMyStation(stationRes.data && stationRes.data.isListed !== false ? stationRes.data : null);
       } catch (err) {

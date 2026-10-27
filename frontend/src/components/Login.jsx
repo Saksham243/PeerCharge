@@ -14,7 +14,7 @@ export default function Login({ setUser }) {
     setLoading(true);
     try {
       const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
-      const res = await axios.post(`http://localhost:5000${endpoint}`, formData);
+      const res = await axios.post(`https://peercharge.onrender.com${endpoint}`, formData);
       localStorage.setItem('user', JSON.stringify(res.data));
       setUser(res.data);
     } catch (err) {

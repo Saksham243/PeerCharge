@@ -7,15 +7,15 @@ export default function TravelerView({ token }) {
   const findStations = async () => {
     const lat = 30.3165; 
     const lng = 78.0322;
-    const res = await axios.get(`http://localhost:5000/api/stations/nearby?lat=${lat}&lng=${lng}`, authHeader);
+    const res = await axios.get(`https://peercharge.onrender.com/api/stations/nearby?lat=${lat}&lng=${lng}`, authHeader);
     setStations(res.data);
   };
   const startCharging = async (stationId) => {
-    const res = await axios.post(`http://localhost:5000/api/bookings/start`, { stationId }, authHeader);
+    const res = await axios.post(`https://peercharge.onrender.com/api/bookings/start`, { stationId }, authHeader);
     setActiveBooking(res.data);
   };
   const stopCharging = async () => {
-    await axios.post(`http://localhost:5000/api/bookings/stop`, { bookingId: activeBooking._id }, authHeader);
+    await axios.post(`https://peercharge.onrender.com/api/bookings/stop`, { bookingId: activeBooking._id }, authHeader);
     setActiveBooking(null);
     alert("Charging complete! Re-login to update wallet balance visually.");
   };

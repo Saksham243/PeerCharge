@@ -71,7 +71,7 @@ export default function Explore({ user, setUser }) {
     const minDelay = new Promise((resolve) => setTimeout(resolve, 1000));
     try {
       const [res] = await Promise.all([
-        axios.get('http://localhost:5000/api/stations/nearby', authHeader),
+        axios.get('https://peercharge.onrender.com/api/stations/nearby', authHeader),
         minDelay
       ]);
       setStations(Array.isArray(res.data) ? res.data : []);
@@ -86,8 +86,8 @@ export default function Explore({ user, setUser }) {
   const fetchTravelerBookings = async () => {
     try {
       const [res, meRes] = await Promise.all([
-        axios.get('http://localhost:5000/api/bookings/my-traveler-bookings', authHeader),
-        axios.get('http://localhost:5000/api/auth/me', authHeader)
+        axios.get('https://peercharge.onrender.com/api/bookings/my-traveler-bookings', authHeader),
+        axios.get('https://peercharge.onrender.com/api/auth/me', authHeader)
       ]);
       setMyBookings(res.data || []);
       if (meRes.data && setUser) {
@@ -112,7 +112,7 @@ export default function Explore({ user, setUser }) {
 
   const fetchTravelerBookingsSilently = async () => {
     try {
-      const res = await axios.get('http://localhost:5000/api/bookings/my-traveler-bookings', authHeader);
+      const res = await axios.get('https://peercharge.onrender.com/api/bookings/my-traveler-bookings', authHeader);
       setMyBookings(res.data || []);
     } catch (err) {
       // silent background polling
@@ -129,7 +129,7 @@ export default function Explore({ user, setUser }) {
     setRequestingStationId(stationId);
     try {
       await axios.post(
-        'http://localhost:5000/api/bookings/request',
+        'https://peercharge.onrender.com/api/bookings/request',
         { stationId, durationMinutes },
         authHeader
       );
@@ -147,7 +147,7 @@ export default function Explore({ user, setUser }) {
     setCancellingBookingId(bookingId);
     try {
       await axios.post(
-        'http://localhost:5000/api/bookings/cancel',
+        'https://peercharge.onrender.com/api/bookings/cancel',
         { bookingId },
         authHeader
       );
@@ -165,7 +165,7 @@ export default function Explore({ user, setUser }) {
     setStoppingBookingId(bookingId);
     try {
       const res = await axios.post(
-        'http://localhost:5000/api/bookings/stop',
+        'https://peercharge.onrender.com/api/bookings/stop',
         { bookingId },
         authHeader
       );
@@ -188,7 +188,7 @@ export default function Explore({ user, setUser }) {
         localStorage.setItem('user', JSON.stringify(updated));
         setUser(updated);
       } else {
-        const meRes = await axios.get('http://localhost:5000/api/auth/me', authHeader);
+        const meRes = await axios.get('https://peercharge.onrender.com/api/auth/me', authHeader);
         const held = meRes.data.heldBalance || 0;
         const wallet = meRes.data.walletBalance || 0;
         const available = typeof meRes.data.availableBalance === 'number'

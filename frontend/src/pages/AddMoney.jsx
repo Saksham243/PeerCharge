@@ -61,7 +61,7 @@ export default function AddMoney({ user, setUser }) {
   useEffect(() => {
     const fetchMe = async () => {
       try {
-        const res = await axios.get('http://localhost:5000/api/auth/me', {
+        const res = await axios.get('https://peercharge.onrender.com/api/auth/me', {
           headers: { Authorization: `Bearer ${user.token}` },
         });
         if (res.data && setUser) {
@@ -93,7 +93,7 @@ export default function AddMoney({ user, setUser }) {
     try {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       const res = await axios.post(
-        'http://localhost:5000/api/auth/topup',
+        'https://peercharge.onrender.com/api/auth/topup',
         { amount, method },
         { headers: { Authorization: `Bearer ${user.token}` } }
       );

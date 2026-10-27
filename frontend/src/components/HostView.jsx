@@ -2,7 +2,7 @@ import axios from 'axios';
 export default function HostView({ token }) {
   const addStation = async () => {
     try {
-      await axios.post(`http://localhost:5000/api/stations`, {
+      await axios.post(`https://peercharge.onrender.com/api/stations`, {
         name: `Home Charger EV`, pricePerHour: 150,
         lat: 30.3165 + (Math.random() * 0.01), lng: 78.0322 + (Math.random() * 0.01)
       }, { headers: { Authorization: `Bearer ${token}` } });

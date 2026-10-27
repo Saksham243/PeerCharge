@@ -75,24 +75,24 @@ export default function HostAnalytics({ user, setUser }) {
     setLoading(true);
     try {
       // 1. Fetch user station
-      const stationRes = await axios.get('http://localhost:5000/api/stations/mine', authHeader);
+      const stationRes = await axios.get('https://peercharge.onrender.com/api/stations/mine', authHeader);
       setStationRecord(stationRes.data);
 
       // 2. Fetch active host bookings (Requested, Accepted, Active)
-      const queueRes = await axios.get('http://localhost:5000/api/bookings/host-dashboard-bookings', authHeader);
+      const queueRes = await axios.get('https://peercharge.onrender.com/api/bookings/host-dashboard-bookings', authHeader);
       setHostQueue(queueRes.data || []);
 
       // 3. Fetch completed booking history for this host
-      const historyRes = await axios.get('http://localhost:5000/api/bookings/my-host-history', authHeader);
+      const historyRes = await axios.get('https://peercharge.onrender.com/api/bookings/my-host-history', authHeader);
       const historyData = Array.isArray(historyRes.data) ? historyRes.data : (historyRes.data.history || []);
       setHistory(historyData);
 
       // 4. Fetch own usage history
-      const ownUsageRes = await axios.get('http://localhost:5000/api/bookings/my-own-usage', authHeader);
+      const ownUsageRes = await axios.get('https://peercharge.onrender.com/api/bookings/my-own-usage', authHeader);
       setOwnUsage(ownUsageRes.data || { totalOwnMinutes: 0, sessions: [] });
 
       // 5. Sync user balances
-      const meRes = await axios.get('http://localhost:5000/api/auth/me', authHeader);
+      const meRes = await axios.get('https://peercharge.onrender.com/api/auth/me', authHeader);
       if (meRes.data && setUser) {
         const held = meRes.data.heldBalance || 0;
         const wallet = meRes.data.walletBalance || 0;
@@ -118,9 +118,9 @@ export default function HostAnalytics({ user, setUser }) {
   const fetchQueueSilently = async () => {
     try {
       const [queueRes, stationRes, ownRes] = await Promise.all([
-        axios.get('http://localhost:5000/api/bookings/host-dashboard-bookings', authHeader),
-        axios.get('http://localhost:5000/api/stations/mine', authHeader),
-        axios.get('http://localhost:5000/api/bookings/my-own-usage', authHeader),
+        axios.get('https://peercharge.onrender.com/api/bookings/host-dashboard-bookings', authHeader),
+        axios.get('https://peercharge.onrender.com/api/stations/mine', authHeader),
+        axios.get('https://peercharge.onrender.com/api/bookings/my-own-usage', authHeader),
       ]);
       setHostQueue(queueRes.data || []);
       setStationRecord(stationRes.data);
@@ -135,7 +135,7 @@ export default function HostAnalytics({ user, setUser }) {
     setActionInProgressId('self-start');
     try {
       await axios.post(
-        'http://localhost:5000/api/bookings/self/start',
+        'https://peercharge.onrender.com/api/bookings/self/start',
         {},
         authHeader
       );
@@ -152,7 +152,7 @@ export default function HostAnalytics({ user, setUser }) {
     setActionInProgressId(bookingId);
     try {
       await axios.post(
-        'http://localhost:5000/api/bookings/accept',
+        'https://peercharge.onrender.com/api/bookings/accept',
         { bookingId },
         authHeader
       );
@@ -169,7 +169,7 @@ export default function HostAnalytics({ user, setUser }) {
     setActionInProgressId(bookingId);
     try {
       await axios.post(
-        'http://localhost:5000/api/bookings/decline',
+        'https://peercharge.onrender.com/api/bookings/decline',
         { bookingId },
         authHeader
       );
@@ -186,7 +186,7 @@ export default function HostAnalytics({ user, setUser }) {
     setActionInProgressId(bookingId);
     try {
       await axios.post(
-        'http://localhost:5000/api/bookings/start-charging',
+        'https://peercharge.onrender.com/api/bookings/start-charging',
         { bookingId },
         authHeader
       );
@@ -204,7 +204,7 @@ export default function HostAnalytics({ user, setUser }) {
     setActionInProgressId(bookingId);
     try {
       const res = await axios.post(
-        'http://localhost:5000/api/bookings/stop',
+        'https://peercharge.onrender.com/api/bookings/stop',
         { bookingId },
         authHeader
       );
@@ -250,7 +250,7 @@ export default function HostAnalytics({ user, setUser }) {
 
     setActionInProgressId('remove-station');
     try {
-      await axios.delete('http://localhost:5000/api/stations/mine', authHeader);
+      await axios.delete('https://peercharge.onrender.com/api/stations/mine', authHeader);
       await fetchHostData();
     } catch (err) {
       alert(err.response?.data?.message || 'Failed to remove charger');
@@ -264,7 +264,7 @@ export default function HostAnalytics({ user, setUser }) {
     setCreating(true);
     try {
       const res = await axios.post(
-        'http://localhost:5000/api/stations',
+        'https://peercharge.onrender.com/api/stations',
         {
           name: formData.name,
           pricePerHour: Number(formData.pricePerHour),
